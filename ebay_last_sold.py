@@ -42,7 +42,6 @@ def scrape_sold_listings(query: str, max_items: int = 40):
 
         soup = BeautifulSoup(resp.text, "html.parser")
 
-        # eBay serves two layouts — detect which one we got
         raw = soup.select("li.s-card")
         if raw:
             diag["layout"] = "s-card"
@@ -111,6 +110,14 @@ def scrape_sold_listings(query: str, max_items: int = 40):
         return pd.DataFrame(), search_url, diag
 
 # ====================== UI ======================
+
+# Initialize session state
+if "sold_df" not in st.session_state:
+    st.session_state.sold_df = None
+    st.session_state.search_url = None
+    st.session_state.diag = None
+    st.session_state.last_query = None
+
 query = st.text_input("🔍 Enter product description or keywords",
                       placeholder="arda guler topps chrome /99",
                       value="arda guler topps chrome /99")
@@ -118,6 +125,19 @@ query = st.text_input("🔍 Enter product description or keywords",
 if st.button("🔎 Search Recently Sold Items", type="primary", use_container_width=True):
     with st.spinner("Fetching latest sold listings from eBay..."):
         sold_df, search_url, diag = scrape_sold_listings(query)
+    st.session_state.sold_df = sold_df
+    st.session_state.search_url = search_url
+    st.session_state.diag = diag
+    st.session_state.last_query = query
+    # Clear any previously selected item when doing a new search
+    if "selected_item" in st.session_state:
+        del st.session_state.selected_item
+
+# Render from session state so results persist across reruns
+if st.session_state.sold_df is not None:
+    sold_df = st.session_state.sold_df
+    search_url = st.session_state.search_url
+    diag = st.session_state.diag
 
     st.caption(f"🔗 Searched: [View on eBay]({search_url})")
 
