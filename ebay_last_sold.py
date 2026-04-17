@@ -166,10 +166,17 @@ if st.session_state.sold_df is not None:
         if "selected_item" in st.session_state:
             row = st.session_state.selected_item
 
+            # Prebuild any strings that need quotes, so f-strings stay simple
+            sel_title = str(row["title"])
+            sel_image = row["image"]
+            sel_link = row["link"]
+            sel_date = str(row["date_sold"])
+            sel_price_text = f"${float(row['sold_price']):.2f}"
+
             # Exact matches only (similarity == 1.0 after normalization), cap at 10
             scored = sold_df.copy()
             scored["similarity"] = scored["title"].apply(
-                lambda t: title_similarity(row["title"], t)
+                lambda t: title_similarity(sel_title, t)
             )
             comps = scored[scored["similarity"] == 1.0].head(10)
 
@@ -177,15 +184,15 @@ if st.session_state.sold_df is not None:
                 top_cols = st.columns([1, 2, 2])
 
                 with top_cols[0]:
-                    if row["image"]:
-                        st.image(row["image"], use_column_width=True)
+                    if sel_image:
+                        st.image(sel_image, use_column_width=True)
 
                 with top_cols[1]:
                     st.subheader("📌 Selected Item")
-                    st.markdown(f"**{row['title']}**")
-                    st.markdown(f"**Sold for:** ${row['sold_price']:.2f}")
-                    st.caption(f"Date sold: {row['date_sold']}")
-                    st.markdown(f"[Open original eBay listing]({row['link']})")
+                    st.markdown(f"**{sel_title}**")
+                    st.markdown(f"**Sold for:** {sel_price_text}")
+                    st.caption(f"Date sold: {sel_date}")
+                    st.markdown(f"[Open original eBay listing]({sel_link})")
                     if st.button("✖ Clear selection"):
                         del st.session_state.selected_item
                         st.rerun()
@@ -199,23 +206,29 @@ if st.session_state.sold_df is not None:
                         median_sold = comps["sold_price"].median()
                         suggested_price = round(avg_sold * 1.12, 2)
 
-                        st.metric("**Suggested List Price**", f"${suggested_price}",
+                        suggested_text = f"${suggested_price}"
+                        avg_text = f"${avg_sold:.2f}"
+                        median_text = f"${median_sold:.2f}"
+
+                        st.metric("**Suggested List Price**", suggested_text,
                                   delta="Avg × 1.12")
                         m1, m2 = st.columns(2)
-                        m1.metric("Avg", f"${avg_sold:.2f}")
-                        m2.metric("Median", f"${median_sold:.2f}")
-                        st.caption(f"Based on **{len(comps)}** exact-match comp{'s' if len(comps) != 1 else ''}")
+                        m1.metric("Avg", avg_text)
+                        m2.metric("Median", median_text)
+                        plural = "s" if len(comps) != 1 else ""
+                        st.caption(f"Based on **{len(comps)}** exact-match comp{plural}")
 
-            st.subheader(f"🎯 Last {len(comps)} Exact-Match Comp{'s' if len(comps) != 1 else ''}")
+            plural = "s" if len(comps) != 1 else ""
+            st.subheader(f"🎯 Last {len(comps)} Exact-Match Comp{plural}")
             if comps.empty:
-                st.info("No exact matches to display. Try clicking a different card or broaden your search query.")
+                st.info("No exact matches to display. Try a different card or broaden your search query.")
             else:
                 display_df = comps[["date_sold", "sold_price", "title"]].copy()
                 display_df["sold_price"] = display_df["sold_price"].apply(lambda x: f"${x:.2f}")
                 st.dataframe(display_df, use_container_width=True, hide_index=True)
 
                 csv = comps.to_csv(index=False)
-                safe_name = re.sub(r"[^A-Za-z0-9]+", "_", row["title"])[:40]
+                safe_name = re.sub(r"[^A-Za-z0-9]+", "_", sel_title)[:40]
                 st.download_button("📥 Export comps to CSV", csv,
                                    f"ebay_comps_{safe_name}.csv", "text/csv")
 
@@ -228,8 +241,16 @@ if st.session_state.sold_df is not None:
         cols = st.columns(4)
         for i, row in sold_df.iterrows():
             with cols[i % 4]:
-                if row["image"]:
-                    st.image(row["image"], use_column_width=True)
-                st.caption(row["date_sold"])
-                st.markdown(f"**{row['title'][:55]}...**")
-                st.markdown(f"**${row['sold
+                card_image = row["image"]
+                card_title = str(row["title"])[:55]
+                card_date = str(row["date_sold"])
+                card_price_text = f"${float(row['sold_price']):.2f}"
+
+                if card_image:
+                    st.image(card_image, use_column_width=True)
+                st.caption(card_date)
+                st.markdown(f"**{card_title}...**")
+                st.markdown(f"**{card_price_text}**")
+                if st.button("View details →", key=f"btn_{i}"):
+                    st.session_state.selected_item = row
+                    st.rerun()
