@@ -1,12 +1,26 @@
+import re
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 from urllib.parse import quote
+from difflib import SequenceMatcher
 
 st.set_page_config(page_title="eBay Last Sold Researcher", page_icon="📦", layout="wide")
 st.title("📦 eBay Last Sold Researcher")
 st.markdown("**Real-time recently sold items + suggested list prices** (scraping-only)")
+
+# ====================== SIMILARITY HELPERS ======================
+STOPWORDS = {"the", "a", "an", "of", "and", "or", "to", "for", "with",
+             "in", "on", "new", "nwt", "rare"}
+
+def _normalize_title(s: str) -> str:
+    tokens = re.findall(r"[a-z0-9]+", s.lower())
+    tokens = [t for t in tokens if t not in STOPWORDS and len(t) >= 2]
+    return " ".join(sorted(tokens))
+
+def title_similarity(a: str, b: str) -> float:
+    return SequenceMatcher(None, _normalize_title(a), _normalize_title(b)).ratio()
 
 # ====================== SCRAPE ======================
 @st.cache_data(ttl=600)
@@ -110,8 +124,6 @@ def scrape_sold_listings(query: str, max_items: int = 40):
         return pd.DataFrame(), search_url, diag
 
 # ====================== UI ======================
-
-# Initialize session state
 if "sold_df" not in st.session_state:
     st.session_state.sold_df = None
     st.session_state.search_url = None
@@ -129,11 +141,9 @@ if st.button("🔎 Search Recently Sold Items", type="primary", use_container_wi
     st.session_state.search_url = search_url
     st.session_state.diag = diag
     st.session_state.last_query = query
-    # Clear any previously selected item when doing a new search
     if "selected_item" in st.session_state:
         del st.session_state.selected_item
 
-# Render from session state so results persist across reruns
 if st.session_state.sold_df is not None:
     sold_df = st.session_state.sold_df
     search_url = st.session_state.search_url
@@ -146,14 +156,11 @@ if st.session_state.sold_df is not None:
         with st.expander("🔧 Diagnostics"):
             st.json(diag)
         if diag.get("blocked"):
-            st.error("eBay served a bot-challenge page. Streamlit Cloud's IP is likely blocked — "
-                     "you'll need a proxy, a scraping API, or eBay's official Browse API.")
+            st.error("eBay served a bot-challenge page. Streamlit Cloud's IP is likely blocked.")
         elif diag.get("raw", 0) == 0:
-            st.info("eBay returned HTML but no listing cards. Layout may have changed again, "
-                    "or the page was stripped. Check `len` in diagnostics.")
+            st.info("eBay returned HTML but no listing cards. Layout may have changed again.")
         else:
-            st.info("Listings found but no parseable prices. Try a broader query "
-                    "(e.g. remove '/99' or other filters).")
+            st.info("Listings found but no parseable prices. Try a broader query.")
     else:
         st.success(f"✅ Found {len(sold_df)} recently sold items")
 
@@ -170,7 +177,7 @@ if st.session_state.sold_df is not None:
                     st.session_state.selected_item = row
                     st.rerun()
 
-        # Sidebar
+        # Sidebar — comps filtered by similarity to the selected card
         if "selected_item" in st.session_state:
             row = st.session_state.selected_item
             with st.sidebar:
@@ -182,22 +189,49 @@ if st.session_state.sold_df is not None:
                 st.caption(f"Date sold: {row['date_sold']}")
                 st.markdown(f"[Open original eBay listing]({row['link']})")
 
-                avg_sold = sold_df["sold_price"].mean()
-                median_sold = sold_df["sold_price"].median()
+                st.divider()
+                st.subheader("🎯 Comps for this card")
+
+                # Score every result by similarity to the selected title
+                scored = sold_df.copy()
+                scored["similarity"] = scored["title"].apply(
+                    lambda t: title_similarity(row["title"], t)
+                )
+                scored = scored.sort_values("similarity", ascending=False)
+
+                threshold = st.slider(
+                    "Match strictness",
+                    min_value=0.30, max_value=0.95, value=0.60, step=0.05,
+                    help="Higher = only very similar listings. Lower = looser matching."
+                )
+                comps = scored[scored["similarity"] >= threshold]
+
+                if comps.empty:
+                    st.info(f"No comps at ≥{threshold:.2f} — showing top 10 closest matches.")
+                    comps = scored.head(10)
+
+                st.caption(f"Using **{len(comps)} comps** for pricing")
+
+                avg_sold = comps["sold_price"].mean()
+                median_sold = comps["sold_price"].median()
                 suggested_price = round(avg_sold * 1.12, 2)
 
-                st.divider()
-                st.metric("**Suggested List Price**", f"${suggested_price}", delta="Recommended today")
-                st.caption("Calculated as: Average sold price × 1.12")
+                st.metric("**Suggested List Price**", f"${suggested_price}",
+                          delta="Recommended today")
+                st.caption("Calculated as: Avg of matching comps × 1.12")
                 st.metric("Average Sold Price", f"${avg_sold:.2f}")
                 st.metric("Median Sold Price", f"${median_sold:.2f}")
 
-                st.subheader("Last 15 Sold Comps")
-                st.dataframe(sold_df.head(15)[["date_sold", "sold_price", "title"]],
-                             use_container_width=True, hide_index=True)
+                st.subheader("Matching Comps")
+                display_df = comps[["date_sold", "sold_price", "similarity", "title"]].head(15).copy()
+                display_df["similarity"] = display_df["similarity"].round(2)
+                display_df["sold_price"] = display_df["sold_price"].apply(lambda x: f"${x:.2f}")
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
 
-                csv = sold_df.to_csv(index=False)
-                st.download_button("📥 Export all sold data to CSV", csv,
-                                   f"ebay_sold_{query.replace(' ', '_')}.csv", "text/csv")
+                csv = comps.to_csv(index=False)
+                safe_name = re.sub(r"[^A-Za-z0-9]+", "_", row["title"])[:40]
+                st.download_button("📥 Export matching comps to CSV", csv,
+                                   f"ebay_comps_{safe_name}.csv", "text/csv")
 
-        st.caption("💡 Pro tip: For new trading cards, try removing the '/99' — it often returns more comps.")
+        st.caption("💡 Tip: Move the slider up for stricter comps (same parallel/grade), "
+                   "down to include broader matches.")
