@@ -14,6 +14,8 @@ st.markdown("**Real-time recently sold items + suggested list prices** (scraping
 STOPWORDS = {"the", "a", "an", "of", "and", "or", "to", "for", "with",
              "in", "on", "new", "nwt", "rare"}
 
+SIMILARITY_THRESHOLD = 0.90
+
 def _normalize_title(s: str) -> str:
     tokens = re.findall(r"[a-z0-9]+", s.lower())
     tokens = [t for t in tokens if t not in STOPWORDS and len(t) >= 2]
@@ -166,19 +168,18 @@ if st.session_state.sold_df is not None:
         if "selected_item" in st.session_state:
             row = st.session_state.selected_item
 
-            # Prebuild any strings that need quotes, so f-strings stay simple
             sel_title = str(row["title"])
             sel_image = row["image"]
             sel_link = row["link"]
             sel_date = str(row["date_sold"])
             sel_price_text = f"${float(row['sold_price']):.2f}"
 
-            # Exact matches only (similarity == 1.0 after normalization), cap at 10
+            # Near-exact matches (>= 0.90 similarity), cap at 10 most recent
             scored = sold_df.copy()
             scored["similarity"] = scored["title"].apply(
                 lambda t: title_similarity(sel_title, t)
             )
-            comps = scored[scored["similarity"] == 1.0].head(10)
+            comps = scored[scored["similarity"] >= SIMILARITY_THRESHOLD].head(10)
 
             with st.container(border=True):
                 top_cols = st.columns([1, 2, 2])
@@ -199,7 +200,7 @@ if st.session_state.sold_df is not None:
 
                 with top_cols[2]:
                     if comps.empty:
-                        st.warning("No exact matches found.")
+                        st.warning("No close matches found.")
                         st.caption("Nothing to base a price on.")
                     else:
                         avg_sold = comps["sold_price"].mean()
@@ -216,14 +217,15 @@ if st.session_state.sold_df is not None:
                         m1.metric("Avg", avg_text)
                         m2.metric("Median", median_text)
                         plural = "s" if len(comps) != 1 else ""
-                        st.caption(f"Based on **{len(comps)}** exact-match comp{plural}")
+                        st.caption(f"Based on **{len(comps)}** close-match comp{plural} (≥{SIMILARITY_THRESHOLD:.2f} similarity)")
 
             plural = "s" if len(comps) != 1 else ""
-            st.subheader(f"🎯 Last {len(comps)} Exact-Match Comp{plural}")
+            st.subheader(f"🎯 Last {len(comps)} Matching Comp{plural}")
             if comps.empty:
-                st.info("No exact matches to display. Try a different card or broaden your search query.")
+                st.info("No close matches to display. Try a different card or broaden your search query.")
             else:
-                display_df = comps[["date_sold", "sold_price", "title"]].copy()
+                display_df = comps[["date_sold", "sold_price", "similarity", "title"]].copy()
+                display_df["similarity"] = display_df["similarity"].round(2)
                 display_df["sold_price"] = display_df["sold_price"].apply(lambda x: f"${x:.2f}")
                 st.dataframe(display_df, use_container_width=True, hide_index=True)
 
