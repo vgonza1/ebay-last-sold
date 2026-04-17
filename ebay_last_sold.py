@@ -240,19 +240,20 @@ if st.session_state.sold_df is not None:
         st.success(f"✅ Found {len(sold_df)} recently sold items")
         st.subheader("Recently Sold Items")
 
-        cols = st.columns(4)
+        GRID_COLS = 8
+        cols = st.columns(GRID_COLS)
         for i, row in sold_df.iterrows():
-            with cols[i % 4]:
+            with cols[i % GRID_COLS]:
                 card_image = row["image"]
-                card_title = str(row["title"])[:55]
+                card_title = str(row["title"])[:40]
                 card_date = str(row["date_sold"])
                 card_price_text = f"${float(row['sold_price']):.2f}"
 
                 if card_image:
-                    st.image(card_image, use_column_width=True)
+                    st.image(card_image, width=120)
                 st.caption(card_date)
-                st.markdown(f"**{card_title}...**")
                 st.markdown(f"**{card_price_text}**")
-                if st.button("View details →", key=f"btn_{i}"):
+                st.caption(card_title)
+                if st.button("→", key=f"btn_{i}"):
                     st.session_state.selected_item = row
                     st.rerun()
