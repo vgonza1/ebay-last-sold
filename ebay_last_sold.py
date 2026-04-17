@@ -165,6 +165,14 @@ if st.session_state.sold_df is not None:
         # ===== Selected item details (shown at top of main area) =====
         if "selected_item" in st.session_state:
             row = st.session_state.selected_item
+
+            # Exact matches only (similarity == 1.0 after normalization), cap at 10
+            scored = sold_df.copy()
+            scored["similarity"] = scored["title"].apply(
+                lambda t: title_similarity(row["title"], t)
+            )
+            comps = scored[scored["similarity"] == 1.0].head(10)
+
             with st.container(border=True):
                 top_cols = st.columns([1, 2, 2])
 
@@ -183,44 +191,33 @@ if st.session_state.sold_df is not None:
                         st.rerun()
 
                 with top_cols[2]:
-                    # Score every result by similarity to the selected title
-                    scored = sold_df.copy()
-                    scored["similarity"] = scored["title"].apply(
-                        lambda t: title_similarity(row["title"], t)
-                    )
-                    scored = scored.sort_values("similarity", ascending=False)
-
-                    threshold = st.slider(
-                        "Match strictness",
-                        min_value=0.30, max_value=0.95, value=0.60, step=0.05,
-                        help="Higher = only very similar listings. Lower = looser matching."
-                    )
-                    comps = scored[scored["similarity"] >= threshold]
                     if comps.empty:
-                        st.info(f"No comps at ≥{threshold:.2f} — using top 10 closest.")
-                        comps = scored.head(10)
+                        st.warning("No exact matches found.")
+                        st.caption("Nothing to base a price on.")
+                    else:
+                        avg_sold = comps["sold_price"].mean()
+                        median_sold = comps["sold_price"].median()
+                        suggested_price = round(avg_sold * 1.12, 2)
 
-                    avg_sold = comps["sold_price"].mean()
-                    median_sold = comps["sold_price"].median()
-                    suggested_price = round(avg_sold * 1.12, 2)
+                        st.metric("**Suggested List Price**", f"${suggested_price}",
+                                  delta="Avg × 1.12")
+                        m1, m2 = st.columns(2)
+                        m1.metric("Avg", f"${avg_sold:.2f}")
+                        m2.metric("Median", f"${median_sold:.2f}")
+                        st.caption(f"Based on **{len(comps)}** exact-match comp{'s' if len(comps) != 1 else ''}")
 
-                    st.metric("**Suggested List Price**", f"${suggested_price}",
-                              delta="Avg × 1.12")
-                    m1, m2 = st.columns(2)
-                    m1.metric("Avg", f"${avg_sold:.2f}")
-                    m2.metric("Median", f"${median_sold:.2f}")
-                    st.caption(f"Based on **{len(comps)}** matching comps")
+            st.subheader(f"🎯 Last {len(comps)} Exact-Match Comp{'s' if len(comps) != 1 else ''}")
+            if comps.empty:
+                st.info("No exact matches to display. Try clicking a different card or broaden your search query.")
+            else:
+                display_df = comps[["date_sold", "sold_price", "title"]].copy()
+                display_df["sold_price"] = display_df["sold_price"].apply(lambda x: f"${x:.2f}")
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
 
-            st.subheader("🎯 Matching Comps")
-            display_df = comps[["date_sold", "sold_price", "similarity", "title"]].head(15).copy()
-            display_df["similarity"] = display_df["similarity"].round(2)
-            display_df["sold_price"] = display_df["sold_price"].apply(lambda x: f"${x:.2f}")
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
-
-            csv = comps.to_csv(index=False)
-            safe_name = re.sub(r"[^A-Za-z0-9]+", "_", row["title"])[:40]
-            st.download_button("📥 Export matching comps to CSV", csv,
-                               f"ebay_comps_{safe_name}.csv", "text/csv")
+                csv = comps.to_csv(index=False)
+                safe_name = re.sub(r"[^A-Za-z0-9]+", "_", row["title"])[:40]
+                st.download_button("📥 Export comps to CSV", csv,
+                                   f"ebay_comps_{safe_name}.csv", "text/csv")
 
             st.divider()
 
@@ -235,10 +232,4 @@ if st.session_state.sold_df is not None:
                     st.image(row["image"], use_column_width=True)
                 st.caption(row["date_sold"])
                 st.markdown(f"**{row['title'][:55]}...**")
-                st.markdown(f"**${row['sold_price']:.2f}**")
-                if st.button("View details →", key=f"btn_{i}"):
-                    st.session_state.selected_item = row
-                    st.rerun()
-
-        st.caption("💡 Tip: Move the slider up for stricter comps (same parallel/grade), "
-                   "down to include broader matches.")
+                st.markdown(f"**${row['sold
