@@ -24,7 +24,7 @@ def _normalize_title(s: str) -> str:
 def title_similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, _normalize_title(a), _normalize_title(b)).ratio()
 
-# ====================== SCRAPE ======================
+# ====================== SCRAPE SOLD ======================
 @st.cache_data(ttl=600)
 def scrape_sold_listings(query: str, max_items: int = 40):
     clean_query = query.replace("/", " ").strip()
@@ -124,6 +124,88 @@ def scrape_sold_listings(query: str, max_items: int = 40):
     except Exception as e:
         st.error(f"Could not reach eBay: {e}")
         return pd.DataFrame(), search_url, diag
+
+# ====================== SCRAPE ACTIVE LISTINGS ======================
+@st.cache_data(ttl=300)
+def scrape_active_listings(query: str, max_items: int = 10):
+    clean_query = query.replace("/", " ").strip()
+    encoded_query = quote(clean_query)
+    search_url = (
+        f"https://www.ebay.com/sch/i.html?_nkw={encoded_query}"
+        "&_sacat=0&rt=nc&_ipg=60&_sop=15"  # _sop=15 = newly listed first
+    )
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/134.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Upgrade-Insecure-Requests": "1",
+    }
+
+    try:
+        resp = requests.get(search_url, headers=headers, timeout=15)
+        resp.raise_for_status()
+
+        low = resp.text.lower()
+        if "pardon our interruption" in low or "are you a robot" in low or "captcha" in low:
+            return pd.DataFrame(), search_url
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        raw = soup.select("li.s-card") or soup.select("li.s-item")
+
+        items = []
+        for it in raw:
+            try:
+                title_el = (it.select_one(".s-card__title")
+                            or it.select_one(".su-styled-text.primary.default")
+                            or it.select_one(".s-item__title"))
+                title = title_el.get_text(strip=True) if title_el else ""
+                if not title or title.lower().startswith("shop on ebay"):
+                    continue
+
+                link_el = (it.select_one("a.s-card__link")
+                           or it.select_one("a.su-link")
+                           or it.select_one(".s-item__link"))
+                link = link_el.get("href") if link_el else "#"
+
+                price_el = (it.select_one(".s-card__price")
+                            or it.select_one(".su-styled-text.positive.bold")
+                            or it.select_one(".s-item__price"))
+                price_str = price_el.get_text(strip=True) if price_el else ""
+                price_str = price_str.split(" to ")[0].split(" - ")[0]
+                price_clean = price_str.replace("$", "").replace(",", "").strip()
+                try:
+                    list_price = float(price_clean)
+                except ValueError:
+                    list_price = 0.0
+                if list_price <= 0:
+                    continue
+
+                img_el = it.select_one("img")
+                image = None
+                if img_el:
+                    src = img_el.get("src") or img_el.get("data-src") or ""
+                    if src.startswith("http"):
+                        image = src
+
+                items.append({
+                    "title": title,
+                    "list_price": list_price,
+                    "link": link,
+                    "image": image,
+                })
+                if len(items) >= max_items:
+                    break
+            except Exception:
+                continue
+
+        return pd.DataFrame(items), search_url
+
+    except Exception as e:
+        return pd.DataFrame(), search_url
 
 # ====================== UI ======================
 if "sold_df" not in st.session_state:
@@ -236,7 +318,7 @@ if st.session_state.sold_df is not None:
                         median_text = f"${median_sold:.2f}"
 
                         st.metric("**Suggested List Price**", suggested_text,
-                                  delta="Avg × 1.12")
+                                  delta="Avg x 1.12")
                         m1, m2 = st.columns(2)
                         m1.metric("Avg", avg_text)
                         m2.metric("Median", median_text)
@@ -245,6 +327,7 @@ if st.session_state.sold_df is not None:
                         st.caption(f"Based on **{len(active_comps)}** {basis} comp{plural} "
                                    f"(of {len(comps)} match{'es' if len(comps) != 1 else ''})")
 
+            # ===== Comps table =====
             plural = "s" if len(comps) != 1 else ""
             st.subheader(f"🎯 Last {len(comps)} Matching Comp{plural}")
 
@@ -271,6 +354,26 @@ if st.session_state.sold_df is not None:
                 safe_name = re.sub(r"[^A-Za-z0-9]+", "_", sel_title)[:40]
                 st.download_button("📥 Export comps to CSV", csv,
                                    f"ebay_comps_{safe_name}.csv", "text/csv")
+
+            # ===== Current active listings =====
+            st.subheader("🛒 Current Listings on eBay")
+            with st.spinner("Fetching active listings..."):
+                active_df, active_url = scrape_active_listings(sel_title)
+
+            if active_df.empty:
+                st.info("No active listings found for this card right now — or eBay blocked the request.")
+            else:
+                st.caption(f"Showing up to 10 active listings · [See all on eBay]({active_url})")
+                act_cols = st.columns(5)
+                for i, arow in active_df.iterrows():
+                    with act_cols[i % 5]:
+                        if arow["image"]:
+                            st.image(arow["image"], width=120)
+                        act_price = f"${float(arow['list_price']):.2f}"
+                        act_title = str(arow["title"])[:50]
+                        st.markdown(f"**{act_price}**")
+                        st.caption(act_title)
+                        st.markdown(f"[View listing]({arow['link']})")
 
             st.divider()
 
