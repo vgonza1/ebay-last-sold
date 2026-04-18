@@ -137,10 +137,12 @@ def _clear_comps_selection():
         del st.session_state["comps_table"]
 
 query = st.text_input("🔍 Enter product description or keywords",
-                      placeholder="arda guler topps chrome /99",
-                      value="arda guler topps chrome /99")
+                      placeholder="e.g. arda guler topps chrome /99")
 
 if st.button("🔎 Search Recently Sold Items", type="primary", use_container_width=True):
+    if not query.strip():
+        st.warning("Please enter a search term first.")
+        st.stop()
     with st.spinner("Fetching latest sold listings from eBay..."):
         sold_df, search_url, diag = scrape_sold_listings(query)
     st.session_state.sold_df = sold_df
@@ -179,7 +181,6 @@ if st.session_state.sold_df is not None:
             sel_date = str(row["date_sold"])
             sel_price_text = f"${float(row['sold_price']):.2f}"
 
-            # Near-exact matches, cap at 10 most recent
             scored = sold_df.copy()
             scored["similarity"] = scored["title"].apply(
                 lambda t: title_similarity(sel_title, t)
@@ -188,7 +189,6 @@ if st.session_state.sold_df is not None:
                      .head(10)
                      .reset_index(drop=True))
 
-            # Read user's row selection from session state (populated by st.dataframe)
             comps_state = st.session_state.get("comps_table")
             selected_indices = []
             if comps_state is not None:
@@ -197,7 +197,6 @@ if st.session_state.sold_df is not None:
                 except (KeyError, TypeError):
                     selected_indices = []
 
-            # Active comps = selected rows, or all if no selection yet
             if selected_indices and not comps.empty:
                 active_comps = comps.iloc[selected_indices]
                 using_selection = True
@@ -253,7 +252,7 @@ if st.session_state.sold_df is not None:
                 st.info("No close matches to display. Try a different card or broaden your search query.")
             else:
                 st.caption("☑️ Click rows to include/exclude them from the pricing calculation. "
-                           "Click again to deselect. No selection = all rows used.")
+                           "No selection = all rows used.")
 
                 display_df = comps[["date_sold", "sold_price", "similarity", "title"]].copy()
                 display_df["similarity"] = display_df["similarity"].round(2)
